@@ -5,7 +5,7 @@ SQLite locally, PostgreSQL when DATABASE_URL is set (e.g. Render)
 
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'portfolio.db')
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -219,6 +219,36 @@ def _row_to_dict(row):
     return dict(row)
 
 
+def _created_at_to_iso_utc(value):
+    """
+    SQLite CURRENT_TIMESTAMP is UTC but returned without timezone; JS would parse
+    naive strings as local time. Normalize to ISO 8601 UTC for correct display.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.astimezone(timezone.utc)
+        return dt.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+    s = str(value).strip()
+    if s.endswith('Z'):
+        return s
+    if len(s) >= 19 and s[10] == ' ':
+        s = s[:10] + 'T' + s[11:]
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return str(value)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    else:
+        dt = dt.astimezone(timezone.utc)
+    return dt.strftime('%Y-%m-%dT%H:%M:%S') + 'Z'
+
+
 # Profile Operations
 def get_profile():
     conn = get_connection()
@@ -317,7 +347,12 @@ def get_all_messages():
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM contact_messages ORDER BY created_at DESC')
-    messages = [_row_to_dict(row) for row in cursor.fetchall()]
+    messages = []
+    for row in cursor.fetchall():
+        d = _row_to_dict(row)
+        if d and 'created_at' in d:
+            d['created_at'] = _created_at_to_iso_utc(d['created_at'])
+        messages.append(d)
     conn.close()
     return messages
 
